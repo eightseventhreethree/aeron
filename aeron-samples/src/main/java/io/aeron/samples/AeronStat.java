@@ -28,6 +28,7 @@ import java.util.Date;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
+import java.util.StringJoiner;
 
 import static io.aeron.driver.status.PerImageIndicator.PER_IMAGE_TYPE_ID;
 import static io.aeron.driver.status.PublisherLimit.PUBLISHER_LIMIT_TYPE_ID;
@@ -64,6 +65,11 @@ public class AeronStat
      * Whether to watch for updates or run once.
      */
     private static final String WATCH = "watch";
+
+        /**
+     * Whether to output in Influx format
+     */
+    private static final String TELEGRAF = "telegraf";
 
     /**
      * Types of the counters.
@@ -106,6 +112,7 @@ public class AeronStat
     {
         long delayMs = 1000L;
         boolean watch = true;
+        boolean telegraf = false;
         Pattern typeFilter = null;
         Pattern identityFilter = null;
         Pattern sessionFilter = null;
@@ -132,6 +139,10 @@ public class AeronStat
                 {
                     case WATCH:
                         watch = Boolean.parseBoolean(argValue);
+                        break;
+
+                    case TELEGRAF:
+                        telegraf = Boolean.parseBoolean(argValue);
                         break;
 
                     case DELAY:
@@ -174,6 +185,11 @@ public class AeronStat
         {
             workLoop(delayMs, () -> printOutput(cncFileReader, counterFilter));
         }
+        else if (telegraf)
+        {
+            final StringJoiner telegrafMetric = new StringJoiner(",", " ", "");
+            telegrafOutput(cncFileReader, telegrafMetric);
+        }
         else
         {
             printOutput(cncFileReader, counterFilter);
@@ -193,6 +209,27 @@ public class AeronStat
             Thread.sleep(delayMs);
         }
         while (running.get());
+    }
+
+    private static void telegrafOutput(final CncFileReader cncFileReader, final StringJoiner telegrafMetric)
+    {
+        final CountersReader counters = cncFileReader.countersReader();
+        final String replaceRegex = "( |,|\\.|-)";
+        final Pattern pattern = Pattern.compile(replaceRegex);
+        counters.forEach(
+            (counterId, typeId, keyBuffer, label) ->
+            {
+                if (counterId <= 24)
+                {
+                    final long cv = counters.getCounterValue(counterId);
+                    final String cl = pattern.matcher(counters.getCounterLabel(counterId)
+                    .toLowerCase()).replaceAll("_");
+                    final String o = cl + "=" + cv;
+                    telegrafMetric.add(o);
+                }
+            }
+        );
+        System.out.println("aeron" + telegrafMetric);
     }
 
     private static void printOutput(final CncFileReader cncFileReader, final CounterFilter counterFilter)
